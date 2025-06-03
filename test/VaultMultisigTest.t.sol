@@ -191,6 +191,149 @@ contract VaultMultisigTest is Test {
         new VaultMultisig(signersArray, 0);
     }
 
+    function test_updateSignersAndQuorumComprehensive() public {
+        // === ПОДГОТОВКА ===
+        // Создаем первую транзакцию со старыми подписантами
+        fundVault(3 ether);
+
+        vm.prank(signer1);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        vm.prank(signer2);
+        vault.approveTransfer(0);
+
+        // Выполняем первую транзакцию
+        vm.prank(signer1);
+        vault.executeTransfer(0);
+
+        // Проверяем начальное состояние
+        assertEq(vault.quorum(), 2);
+        assertEq(vault.getTransferCount(), 1);
+
+        // === ТЕСТ ОШИБОК ===
+        // Пустой массив подписантов
+        address[] memory emptySigners = new address[](0);
+        vm.prank(signer1);
+        vm.expectRevert(VaultMultisig.SignersArrayCannotBeEmpty.selector);
+        vault.updateSignersAndQuorum(emptySigners, 1);
+
+        // Нулевой кворум
+        address[] memory validSigners = new address[](2);
+        validSigners[0] = vm.addr(10);
+        validSigners[1] = vm.addr(11);
+
+        vm.prank(signer1);
+        vm.expectRevert(VaultMultisig.QuorumCannotBeZero.selector);
+        vault.updateSignersAndQuorum(validSigners, 0);
+
+        // Кворум больше количества подписантов
+        vm.prank(signer1);
+        vm.expectRevert(VaultMultisig.QuorumGreaterThanSigners.selector);
+        vault.updateSignersAndQuorum(validSigners, 3);
+
+        // Нулевой адрес в подписантах
+        address[] memory signersWithZero = new address[](2);
+        signersWithZero[0] = vm.addr(10);
+        signersWithZero[1] = address(0);
+
+        vm.prank(signer1);
+        vm.expectRevert("Zero address in signers");
+        vault.updateSignersAndQuorum(signersWithZero, 1);
+
+        // === УСПЕШНОЕ ОБНОВЛЕНИЕ ===
+        // Создаем новый массив подписантов
+        address[] memory newSigners = new address[](3);
+        newSigners[0] = vm.addr(20);
+        newSigners[1] = vm.addr(21);
+        newSigners[2] = vm.addr(22);
+        uint256 newQuorum = 2;
+
+        // Обновляем подписантов
+        vm.prank(signer1);
+
+        vm.expectEmit(false, false, false, false);
+        emit VaultMultisig.MultiSigSignersUpdated();
+
+        vm.expectEmit(false, false, false, true);
+        emit VaultMultisig.QuorumUpdated(newQuorum);
+
+        vault.updateSignersAndQuorum(newSigners, newQuorum);
+
+        // Проверяем, что кворум обновился
+        assertEq(vault.quorum(), newQuorum);
+
+        // === ПРОВЕРКА УДАЛЕНИЯ СТАРЫХ ПОДПИСАНТОВ ===
+        // Все старые подписанты должны потерять доступ
+        vm.prank(signer1);
+        vm.expectRevert(VaultMultisig.InvalidMultisigSigner.selector);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        vm.prank(signer2);
+        vm.expectRevert(VaultMultisig.InvalidMultisigSigner.selector);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        vm.prank(signer3);
+        vm.expectRevert(VaultMultisig.InvalidMultisigSigner.selector);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        // === ПРОВЕРКА РАБОТЫ НОВЫХ ПОДПИСАНТОВ ===
+        // Новые подписанты должны иметь доступ
+        vm.prank(newSigners[0]);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        // Проверяем состояние новой транзакции
+        (address to, uint256 amount, uint256 approvals, bool executed) = vault.getTransfer(1);
+        assertEq(to, defaultRecepient);
+        assertEq(amount, 1 ether);
+        assertEq(approvals, 1);
+        assertEq(executed, false);
+
+        // Второй новый подписант одобряет
+        vm.prank(newSigners[1]);
+        vault.approveTransfer(1);
+
+        // Проверяем, что достигнут кворум
+        (,, uint256 finalApprovals,) = vault.getTransfer(1);
+        assertEq(finalApprovals, 2);
+
+        // Выполняем транзакцию
+        vm.prank(newSigners[0]);
+        vault.executeTransfer(1);
+
+        // Проверяем, что транзакция выполнена
+        (,,, bool finalExecuted) = vault.getTransfer(1);
+        assertTrue(finalExecuted);
+
+        // === ПРОВЕРКА ФУНКЦИЙ ПРОСМОТРА ===
+        // hasSignedTransfer должен работать корректно
+        assertTrue(vault.hasSignedTransfer(1, newSigners[0]));
+        assertTrue(vault.hasSignedTransfer(1, newSigners[1]));
+        assertFalse(vault.hasSignedTransfer(1, newSigners[2]));
+
+        // Проверяем общее количество транзакций
+        assertEq(vault.getTransferCount(), 2);
+
+        // === ПРОВЕРКА ПОВТОРНОГО ОБНОВЛЕНИЯ ===
+        // Создаем еще один набор подписантов
+        address[] memory newerSigners = new address[](1);
+        newerSigners[0] = vm.addr(100);
+
+        vm.prank(newSigners[0]);
+        vault.updateSignersAndQuorum(newerSigners, 1);
+
+        // Проверяем, что предыдущие новые подписанты тоже потеряли доступ
+        vm.prank(newSigners[0]);
+        vm.expectRevert(VaultMultisig.InvalidMultisigSigner.selector);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        // А новейший подписант имеет доступ
+        vm.prank(newerSigners[0]);
+        vault.initiateTransfer(defaultRecepient, 1 ether);
+
+        assertEq(vault.quorum(), 1);
+        assertEq(vault.getTransferCount(), 3);
+    }
+
     function fundVault(uint256 amount) internal {
         vm.deal(address(vault), amount);
     }

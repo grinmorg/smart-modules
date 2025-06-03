@@ -111,6 +111,7 @@ contract VaultMultisig {
 
         for (uint256 i = 0; i < _signers.length; i++) {
             multiSigSigners[_signers[i]] = true;
+            currentMultiSigSigners.push(_signers[i]); // ← Добавил эту строку, так как без неё не проходил тест test_correctUpdateSingersAndQuorum
         }
 
         quorum = _quorum;
